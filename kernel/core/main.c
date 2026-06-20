@@ -256,6 +256,7 @@ kernel_main(uint32_t mb2_magic, uint64_t mb2_info)
     vfs_init();
     ramfs_mount("/");
     procfs_mount("/proc");
+    tty_dev_init();    /* /dev/tty0 must exist before proc_init opens it */
     proc_init();
     sched_init();
     syscall_init();

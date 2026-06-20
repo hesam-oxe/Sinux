@@ -20,17 +20,7 @@ sys_write(int fd, const void *buf, size_t n)
 {
     process_t *p = proc_current();
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
-
-    if (fd == 1 || fd == 2) {
-        const char *s = (const char *)buf;
-        for (size_t i = 0; i < n; i++) {
-            extern void tty_putc(char);
-            tty_putc(s[i]);
-        }
-        return (int64_t)n;
-    }
-
-    if (!p->fds[fd].file) return -EBADF;
+    if (!p->fds[fd].file)        return -EBADF;
     return vfs_write(p->fds[fd].file, buf, n);
 }
 
@@ -39,19 +29,7 @@ sys_read(int fd, void *buf, size_t n)
 {
     process_t *p = proc_current();
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
-
-    if (fd == 0) {
-        extern char kbd_getc(void);
-        char *b = (char *)buf;
-        size_t i;
-        for (i = 0; i < n; i++) {
-            b[i] = kbd_getc();
-            if (b[i] == '\n') { i++; break; }
-        }
-        return (int64_t)i;
-    }
-
-    if (!p->fds[fd].file) return -EBADF;
+    if (!p->fds[fd].file)        return -EBADF;
     return vfs_read(p->fds[fd].file, buf, n);
 }
 

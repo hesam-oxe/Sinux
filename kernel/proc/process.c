@@ -3,6 +3,7 @@
 #include "../../mm/vmm.h"
 #include "../../lib/string.h"
 #include "../../lib/printk.h"
+#include "../fs/vfs.h"
 
 static process_t proc_table[MAX_PROCS];
 static process_t *current_proc = NULL;
@@ -18,6 +19,13 @@ proc_init(void)
     proc_table[0].pml4      = (uint64_t *)vmm_kernel_pml4();
     kstrcpy(proc_table[0].cwd, "/");
     current_proc = &proc_table[0];
+
+    /* Open /dev/tty0 for stdin (0), stdout (1), stderr (2).
+     * All userspace processes inherit these through fork/execve. */
+    file_t *f;
+    f = vfs_open("/dev/tty0", O_RDONLY); if (f) proc_table[0].fds[0].file = f;
+    f = vfs_open("/dev/tty0", O_WRONLY); if (f) proc_table[0].fds[1].file = f;
+    f = vfs_open("/dev/tty0", O_WRONLY); if (f) proc_table[0].fds[2].file = f;
 }
 
 process_t *

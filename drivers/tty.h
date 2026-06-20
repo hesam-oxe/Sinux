@@ -7,3 +7,6 @@ void tty_setcolor_info(void);
 void tty_setcolor_err(void);
 void tty_setcolor_ok(void);
 void tty_setcolor_reset(void);
+
+/* TTY character device — call after ramfs_mount() */
+void tty_dev_init(void);
