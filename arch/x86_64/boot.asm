@@ -269,8 +269,21 @@ isr_pit:
     POP_ALL
     iretq
 
+; ── User context save area (for fork) ──────────────────────────────
+section .bss
+global user_ctx_rip, user_ctx_rflags, user_ctx_rsp
+user_ctx_rip:    resq 1
+user_ctx_rflags: resq 1
+user_ctx_rsp:    resq 1
+section .text
+
 global syscall_asm_entry
 syscall_asm_entry:
+
+    ; Capture user state BEFORE any stack changes — fork() reads these
+    mov [user_ctx_rip],    rcx   ; user RIP  (SYSCALL saves RIP → RCX)
+    mov [user_ctx_rflags], r11   ; user RFLAGS (SYSCALL saves RFLAGS → R11)
+    mov [user_ctx_rsp],    rsp   ; user RSP (unchanged at SYSCALL entry)
 
     push rcx
     push r11
@@ -283,6 +296,23 @@ syscall_asm_entry:
     pop  rbp
     pop  r11
     pop  rcx
+    o64 sysret
+
+; ── fork child trampoline ───────────────────────────────────────────
+; Called by arch_switch when the forked child is first scheduled.
+; arch_switch restores: r15, r14, r13, r12, rbp, rbx
+; We encode:  r12 = user RIP
+;             r13 = user RSP
+;             r14 = user RFLAGS
+global fork_child_stub
+fork_child_stub:
+    mov ax, 0x23        ; restore user data segments
+    mov ds, ax
+    mov es, ax
+    xor rax, rax        ; child returns 0 from fork()
+    mov rcx, r12        ; user RIP  → sysretq reads rcx
+    mov r11, r14        ; user RFLAGS → sysretq reads r11
+    mov rsp, r13        ; switch back to user stack (pre-syscall RSP)
     o64 sysret
 
 global _enter_usermode

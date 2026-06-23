@@ -21,6 +21,7 @@ void      vmm_init(void);
 uint64_t *vmm_kernel_pml4(void);
 uint64_t *vmm_new_pml4(void);
 void      vmm_destroy_pml4(uint64_t *pml4);
+uint64_t *vmm_clone_pml4(uint64_t *src);  /* deep-copy user pages for fork() */
 
 void      vmm_map(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);
 void      vmm_unmap(uint64_t *pml4, uint64_t virt);

@@ -20,17 +20,7 @@ sys_write(int fd, const void *buf, size_t n)
 {
     process_t *p = proc_current();
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
-
-    if (fd == 1 || fd == 2) {
-        const char *s = (const char *)buf;
-        for (size_t i = 0; i < n; i++) {
-            extern void tty_putc(char);
-            tty_putc(s[i]);
-        }
-        return (int64_t)n;
-    }
-
-    if (!p->fds[fd].file) return -EBADF;
+    if (!p->fds[fd].file)        return -EBADF;
     return vfs_write(p->fds[fd].file, buf, n);
 }
 
@@ -39,19 +29,7 @@ sys_read(int fd, void *buf, size_t n)
 {
     process_t *p = proc_current();
     if (fd < 0 || fd >= MAX_FDS) return -EBADF;
-
-    if (fd == 0) {
-        extern char kbd_getc(void);
-        char *b = (char *)buf;
-        size_t i;
-        for (i = 0; i < n; i++) {
-            b[i] = kbd_getc();
-            if (b[i] == '\n') { i++; break; }
-        }
-        return (int64_t)i;
-    }
-
-    if (!p->fds[fd].file) return -EBADF;
+    if (!p->fds[fd].file)        return -EBADF;
     return vfs_read(p->fds[fd].file, buf, n);
 }
 
@@ -99,21 +77,69 @@ sys_exit(int code)
     return 0;
 }
 
+/* Defined in boot.asm — written at every SYSCALL entry */
+extern uint64_t user_ctx_rip;
+extern uint64_t user_ctx_rflags;
+extern uint64_t user_ctx_rsp;
+
+/* Defined in boot.asm — first thing a forked child runs */
+extern void fork_child_stub(void);
+
 static int64_t
 sys_fork(void)
 {
-    process_t *child = proc_create();
-    if (!child) return -ENOMEM;
+    process_t *parent = proc_current();
 
-    process_t *p = proc_current();
+    /* ── 1. clone address space ──────────────────────────────────── */
+    uint64_t *child_pml4 = vmm_clone_pml4(parent->pml4);
+    if (!child_pml4) return -ENOMEM;
+
+    /* ── 2. allocate child PCB ───────────────────────────────────── */
+    process_t *child = proc_create();
+    if (!child) { vmm_destroy_pml4(child_pml4); return -ENOMEM; }
+
+    child->pml4  = child_pml4;
+    child->ppid  = parent->pid;
+    child->brk   = parent->brk;
+    kstrcpy(child->cwd, parent->cwd);
+
+    /* ── 3. inherit open file descriptors ────────────────────────── */
     for (int i = 0; i < MAX_FDS; i++) {
-        child->fds[i] = p->fds[i];
+        child->fds[i] = parent->fds[i];
         if (child->fds[i].file)
             child->fds[i].file->refcount++;
     }
 
+    /* ── 4. build arch_switch frame on child's kernel stack ─────────
+     *
+     * arch_switch restores (in pop order):
+     *   popfq, pop r15, pop r14, pop r13, pop r12, pop rbp, pop rbx, ret
+     *
+     * We encode the user context in callee-saved regs so that
+     * fork_child_stub (the ret target) can read them without
+     * needing separate arguments:
+     *
+     *   r12 = user RIP    (where syscall returns to in user space)
+     *   r13 = user RSP    (user stack before our SYSCALL pushes)
+     *   r14 = user RFLAGS
+     */
+    uint64_t *sp = (uint64_t *)(child->kstack + KSTACK_SIZE);
+
+    *--sp = (uint64_t)fork_child_stub; /* ret  → first thing child runs   */
+    *--sp = 0;                          /* rbx                              */
+    *--sp = 0;                          /* rbp                              */
+    *--sp = user_ctx_rip;              /* r12  → user RIP                  */
+    *--sp = user_ctx_rsp;              /* r13  → user RSP (pre-syscall)    */
+    *--sp = user_ctx_rflags;           /* r14  → user RFLAGS               */
+    *--sp = 0;                          /* r15                              */
+    *--sp = 0x202ULL;                  /* rflags (IF=1, reserved bit 1)    */
+
+    child->rsp = (uint64_t)sp;
+
+    /* ── 5. schedule ─────────────────────────────────────────────── */
     sched_add(child);
-    return child->pid;
+
+    return child->pid;   /* parent gets child PID; child gets 0 via stub */
 }
 
 static int64_t
@@ -173,18 +199,106 @@ syscall_entry(uint64_t nr,
         return signal_set_handler((int)a1, &act);
     }
     case SYS_EXECVE: {
-        file_t *f = vfs_open((char*)a1, O_RDONLY);
-        if (!f) return -ENOENT;
-        size_t sz = (size_t)f->inode->size;
+        const char  *path      = (const char *)a1;
+        char       **user_argv = (char **)a2;
+        char       **user_envp = (char **)a3;
+
+        /* ── copy argv[] to kernel buffers ───────────────────────── */
+        #define EXEC_MAX_ARGS 64
+        int   argc = 0;
+        char *kargv[EXEC_MAX_ARGS + 1];
+        kmemset(kargv, 0, sizeof(kargv));
+
+        if (user_argv) {
+            while (argc < EXEC_MAX_ARGS && user_argv[argc]) {
+                size_t len  = kstrlen(user_argv[argc]) + 1;
+                kargv[argc] = kmalloc(len);
+                if (!kargv[argc]) {
+                    for (int j = 0; j < argc; j++) kfree(kargv[j]);
+                    return -ENOMEM;
+                }
+                kmemcpy(kargv[argc], user_argv[argc], len);
+                argc++;
+            }
+        }
+        kargv[argc] = NULL;
+
+        /* ── copy envp[] to kernel buffers ───────────────────────── */
+        int   envc = 0;
+        char *kenvp[EXEC_MAX_ARGS + 1];
+        kmemset(kenvp, 0, sizeof(kenvp));
+
+        if (user_envp) {
+            while (envc < EXEC_MAX_ARGS && user_envp[envc]) {
+                size_t len  = kstrlen(user_envp[envc]) + 1;
+                kenvp[envc] = kmalloc(len);
+                if (!kenvp[envc]) {
+                    for (int j = 0; j < envc; j++) kfree(kenvp[j]);
+                    for (int j = 0; j < argc; j++) kfree(kargv[j]);
+                    return -ENOMEM;
+                }
+                kmemcpy(kenvp[envc], user_envp[envc], len);
+                envc++;
+            }
+        }
+        kenvp[envc] = NULL;
+
+        /* ── read ELF from filesystem ────────────────────────────── */
+        file_t *f = vfs_open(path, O_RDONLY);
+        if (!f) {
+            for (int j = 0; j < argc; j++) kfree(kargv[j]);
+            for (int j = 0; j < envc; j++) kfree(kenvp[j]);
+            return -ENOENT;
+        }
+        size_t   sz  = (size_t)f->inode->size;
         uint8_t *buf = kmalloc(sz);
-        if (!buf) { vfs_close(f); return -ENOMEM; }
+        if (!buf) {
+            vfs_close(f);
+            for (int j = 0; j < argc; j++) kfree(kargv[j]);
+            for (int j = 0; j < envc; j++) kfree(kenvp[j]);
+            return -ENOMEM;
+        }
         vfs_read(f, buf, sz);
         vfs_close(f);
-        process_t *p = proc_current();
-        if (!p->pml4) p->pml4 = vmm_new_pml4();
-        elf_info_t info = elf_load(p->pml4, buf, sz);
-        if (!info.valid) return -EINVAL;
-        usermode_exec(p, info.entry, info.load_end);
+
+        /* ── load ELF into a fresh address space ─────────────────── */
+        uint64_t *new_pml4 = vmm_new_pml4();
+        if (!new_pml4) {
+            kfree(buf);
+            for (int j = 0; j < argc; j++) kfree(kargv[j]);
+            for (int j = 0; j < envc; j++) kfree(kenvp[j]);
+            return -ENOMEM;
+        }
+        elf_info_t info = elf_load(new_pml4, buf, sz);
+        kfree(buf);
+        if (!info.valid) {
+            vmm_destroy_pml4(new_pml4);
+            for (int j = 0; j < argc; j++) kfree(kargv[j]);
+            for (int j = 0; j < envc; j++) kfree(kenvp[j]);
+            return -EINVAL;
+        }
+
+        /* ── replace process address space ───────────────────────── */
+        process_t *p       = proc_current();
+        uint64_t  *old_pml4 = p->pml4;
+        p->pml4 = new_pml4;
+
+        /*
+         * Note: old_pml4 is freed AFTER usermode_exec builds the new
+         * user stack (which needs the kernel stack to still be usable).
+         * vmm_destroy_pml4 only frees user pages (entries 0-255) and
+         * those physical pages are identity-mapped, so it's safe to
+         * call even after switching CR3.
+         */
+
+        /* ── jump to user space — does not return ────────────────── */
+        usermode_exec(p, info.entry, info.load_end,
+                      argc, kargv, envc, kenvp);
+
+        /* unreachable — kept for error-path clarity */
+        vmm_destroy_pml4(old_pml4);
+        for (int j = 0; j < argc; j++) kfree(kargv[j]);
+        for (int j = 0; j < envc; j++) kfree(kenvp[j]);
         return 0;
     }
     default:

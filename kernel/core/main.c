@@ -6,6 +6,7 @@
 #include "../fs/procfs.h"
 #include "../fs/ext2.h"
 #include "../syscall/syscall.h"
+#include "../proc/init.h"
 #include "../../arch/x86_64/gdt.h"
 #include "../../arch/x86_64/idt.h"
 #include "../../arch/x86_64/pic.h"
@@ -256,6 +257,7 @@ kernel_main(uint32_t mb2_magic, uint64_t mb2_info)
     vfs_init();
     ramfs_mount("/");
     procfs_mount("/proc");
+    tty_dev_init();    /* /dev/tty0 must exist before proc_init opens it */
     proc_init();
     sched_init();
     syscall_init();
@@ -284,15 +286,34 @@ kernel_main(uint32_t mb2_magic, uint64_t mb2_info)
     __asm__ volatile("sti");
 
     tty_setcolor_info();
-    tty_puts("#############################################\n"
-             "#                   Sinux                   #\n"
-             "#     Made By SUN (Sinux Users Network)     #\n"
-             "#############################################\n");
+    tty_puts("############################################\n"
+             "#                  Sinux                  #\n"
+             "#    Made By SUN (Sinux Users Network)    #\n"
+             "############################################\n");
     tty_setcolor_reset();
 
-    uint64_t fr=(uint64_t)pmm_free_pages() *PAGE_SIZE/(1024*1024);
-    uint64_t to=(uint64_t)pmm_total_pages()*PAGE_SIZE/(1024*1024);
-    printk(KERN_INFO "RAM: %u/%u MiB  |  Type 'help'\n\n", fr, to);
+    uint64_t fr = (uint64_t)pmm_free_pages()  * PAGE_SIZE / (1024*1024);
+    uint64_t to = (uint64_t)pmm_total_pages() * PAGE_SIZE / (1024*1024);
+    printk(KERN_INFO "RAM: %u/%u MiB\n\n", fr, to);
 
+    /* ── launch ring-3 init ──────────────────────────────────────
+     * proc_spawn_init() reads /sbin/init or /bin/init, sets up the
+     * process and adds it to the scheduler.  PID 0 then becomes the
+     * kernel idle task.  On the first PIT tick the scheduler will
+     * context-switch to PID 1 via fork_child_stub → sysretq.
+     *
+     * Fallback: if no init binary exists, keep the built-in kernel
+     * shell running in ring 0 (useful for development).
+     */
+    if (proc_spawn_init() == 0) {
+        printk(KERN_INFO
+               "kernel: idle — init will run on next scheduler tick\n");
+        for (;;)
+            __asm__ volatile("hlt");
+    }
+
+    printk(KERN_WARNING
+           "kernel: no init binary — falling back to kernel shell\n"
+           "        (place ELF at /sbin/init or /bin/init)\n\n");
     shell();
 }

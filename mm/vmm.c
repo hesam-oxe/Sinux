@@ -192,3 +192,61 @@ kfree(void *ptr)
         kfree_slab(ptr);
     }
 }
+
+/*
+ * vmm_clone_pml4 — deep copy of user address space for fork()
+ *
+ * Walks PML4 entries 0-255 (user space only).
+ * For every present page: allocates a fresh physical page,
+ * copies the content, and maps it at the same virtual address
+ * in the new PML4.  Kernel mappings (entries 256-511) are
+ * inherited by vmm_new_pml4() automatically.
+ */
+uint64_t *
+vmm_clone_pml4(uint64_t *src)
+{
+    uint64_t *dst = vmm_new_pml4();
+    if (!dst) return NULL;
+
+    for (int p4 = 0; p4 < 256; p4++) {
+        if (!(src[p4] & VMM_PRESENT)) continue;
+
+        uint64_t *src_pdpt = (uint64_t *)(src[p4] & ~0xFFFULL);
+
+        for (int p3 = 0; p3 < 512; p3++) {
+            if (!(src_pdpt[p3] & VMM_PRESENT)) continue;
+
+            uint64_t *src_pdt = (uint64_t *)(src_pdpt[p3] & ~0xFFFULL);
+
+            for (int p2 = 0; p2 < 512; p2++) {
+                if (!(src_pdt[p2] & VMM_PRESENT)) continue;
+
+                uint64_t *src_pt = (uint64_t *)(src_pdt[p2] & ~0xFFFULL);
+
+                for (int p1 = 0; p1 < 512; p1++) {
+                    if (!(src_pt[p1] & VMM_PRESENT)) continue;
+
+                    uint64_t src_phys = src_pt[p1] & ~0xFFFULL;
+                    uint64_t flags    = src_pt[p1] &  0xFFFULL;
+
+                    /* Allocate new page and copy content */
+                    void *new_page = pmm_alloc();
+                    if (!new_page) {
+                        vmm_destroy_pml4(dst);
+                        return NULL;
+                    }
+                    kmemcpy(new_page, (void *)src_phys, PAGE_SIZE);
+
+                    /* Reconstruct virtual address from table indices */
+                    uint64_t virt = ((uint64_t)p4 << 39)
+                                  | ((uint64_t)p3 << 30)
+                                  | ((uint64_t)p2 << 21)
+                                  | ((uint64_t)p1 << 12);
+
+                    vmm_map(dst, virt, (uint64_t)new_page, flags);
+                }
+            }
+        }
+    }
+    return dst;
+}

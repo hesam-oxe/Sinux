@@ -1,6 +1,7 @@
 #include "scheduler.h"
 #include "process.h"
 #include "../../arch/x86_64/pit.h"
+#include "../../arch/x86_64/gdt.h"
 #include "../../lib/string.h"
 
 #define SCHED_QUEUE_SIZE 256
@@ -50,6 +51,12 @@ do_switch(process_t *from, process_t *to) {
     to->state   = PROC_RUNNING;
     to->timeslice = 5;
     proc_set_current(to);
+
+    /* Update TSS.rsp0 so that hardware interrupts landing while 'to'
+     * runs in ring 3 switch to 'to's kernel stack, not the old one. */
+    if (to->kstack)
+        gdt_set_kernel_stack((uint64_t)(to->kstack + KSTACK_SIZE));
+
     uint64_t cr3 = to->pml4 ? (uint64_t)to->pml4 : 0;
     arch_switch(&from->rsp, to->rsp, cr3);
 }

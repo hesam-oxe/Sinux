@@ -1,4 +1,5 @@
 #include "usermode.h"
+#include "process.h"
 #include "../../mm/pmm.h"
 #include "../../mm/vmm.h"
 #include "../../lib/string.h"
@@ -22,8 +23,76 @@ usermode_map_stack(uint64_t *pml4)
     }
 }
 
+/*
+ * build_user_stack — lay out the SysV AMD64 initial stack
+ *
+ * Stack layout at the returned RSP (grows downward from stack_top):
+ *
+ *   high │ envp strings (null-terminated)       │
+ *        │ argv strings (null-terminated)        │
+ *        │ padding (16-byte align)               │
+ *        │ NULL          ← end of envp[]         │
+ *        │ envp[envc-1]                          │
+ *        │ …                                     │
+ *        │ envp[0]                               │
+ *        │ NULL          ← end of argv[]         │
+ *        │ argv[argc-1]                          │
+ *        │ …                                     │
+ *        │ argv[0]                               │
+ *   RSP → argc (uint64_t)                        │
+ *
+ * _start pops argc, then reads argv[] and envp[] from the stack.
+ */
+#define EXEC_MAX_ARGS 64
+
+uint64_t
+build_user_stack(uint64_t stack_top,
+                 int argc, char **argv,
+                 int envc, char **envp)
+{
+    char *uarg[EXEC_MAX_ARGS];   /* user-VAs for argv strings */
+    char *uenv[EXEC_MAX_ARGS];   /* user-VAs for envp strings */
+
+    uint8_t *sp = (uint8_t *)stack_top;
+
+    /* ── copy strings onto stack (high → low address) ───── */
+    for (int i = envc - 1; i >= 0; i--) {
+        size_t len = kstrlen(envp[i]) + 1;
+        sp -= len;
+        kmemcpy(sp, envp[i], len);
+        uenv[i] = (char *)sp;
+    }
+    for (int i = argc - 1; i >= 0; i--) {
+        size_t len = kstrlen(argv[i]) + 1;
+        sp -= len;
+        kmemcpy(sp, argv[i], len);
+        uarg[i] = (char *)sp;
+    }
+
+    /* ── 16-byte align ───────────────────────────────────── */
+    sp = (uint8_t *)((uint64_t)sp & ~15ULL);
+
+    /* ── envp pointer array (NULL-terminated) ────────────── */
+    sp -= 8; *(uint64_t *)sp = 0;
+    for (int i = envc - 1; i >= 0; i--) {
+        sp -= 8; *(uint64_t *)sp = (uint64_t)uenv[i];
+    }
+
+    /* ── argv pointer array (NULL-terminated) ────────────── */
+    sp -= 8; *(uint64_t *)sp = 0;
+    for (int i = argc - 1; i >= 0; i--) {
+        sp -= 8; *(uint64_t *)sp = (uint64_t)uarg[i];
+    }
+
+    /* ── argc ────────────────────────────────────────────── */
+    sp -= 8; *(uint64_t *)sp = (uint64_t)argc;
+
+    return (uint64_t)sp;   /* RSP for _start */
+}
+
 void
-usermode_exec(process_t *proc, uint64_t entry, uint64_t load_end)
+usermode_exec(process_t *proc, uint64_t entry, uint64_t load_end,
+              int argc, char **argv, int envc, char **envp)
 {
     if (!proc->pml4) return;
 
@@ -36,10 +105,12 @@ usermode_exec(process_t *proc, uint64_t entry, uint64_t load_end)
 
     vmm_switch(proc->pml4);
 
-    uint64_t user_rsp = USER_STACK_TOP - 16;
+    uint64_t user_rsp = build_user_stack(USER_STACK_TOP,
+                                          argc, argv,
+                                          envc, envp);
 
-    printk(KERN_INFO "usermode: jumping to entry=0x%x rsp=0x%x\n",
-           entry, user_rsp);
+    printk(KERN_INFO "exec: entry=0x%x rsp=0x%x argc=%d\n",
+           entry, user_rsp, argc);
 
     _enter_usermode(entry, user_rsp);
 }
