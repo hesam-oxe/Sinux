@@ -1,5 +1,6 @@
 #include "keyboard.h"
 #include "tty.h"
+#include "fb.h"
 #include "../arch/x86_64/pic.h"
 #include "../lib/io.h"
 #include <stdbool.h>
@@ -44,15 +45,37 @@ char kbd_getc(void) {
     char c=buf[tail]; tail=(tail+1)%KBUF; return c;
 }
 
+/*
+ * kbd_readline — خوندن یه خط از کاربر با echo و cursor مرئی
+ *   - Backspace: کاراکتر آخر رو پاک می‌کنه
+ *   - Enter: خط رو تموم می‌کنه
+ *   - cursor بلاک قبل از منتظر موندن نشون داده میشه
+ */
 void kbd_readline(char *b, int max) {
-    int n=0;
-    while(n<max-1){
-        char c=kbd_getc();
-        if(c=='\n'){tty_putc('\n');break;}
-        if(c=='\b'){if(n>0){n--;tty_putc('\b');}}
-        else{b[n++]=c;tty_putc(c);}
+    int n = 0;
+    fb_cursor_show();
+    while (n < max - 1) {
+        char c = kbd_getc();
+        fb_cursor_hide();
+
+        if (c == '\n') {
+            tty_putc('\n');
+            break;
+        }
+        if (c == '\b') {
+            if (n > 0) {
+                n--;
+                tty_putc('\b');
+            }
+        } else {
+            b[n++] = c;
+            tty_putc(c);
+        }
+
+        fb_cursor_show();
     }
-    b[n]='\0';
+    fb_cursor_hide();
+    b[n] = '\0';
 }
 
 void keyboard_init(void) { pic_unmask(1); }

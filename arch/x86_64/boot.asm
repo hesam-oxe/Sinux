@@ -13,6 +13,8 @@ mb2_start:
     dd MB2_ARCH
     dd MB2_LEN
     dd MB2_CHECKSUM
+
+    ; ── End tag ───────────────────────────────────────────
     dw 0
     dw 0
     dd 8

@@ -1,11 +1,13 @@
 #include "../../lib/printk.h"
 #include "../../drivers/tty.h"
+#include "../../drivers/fb.h"
 #include <stdint.h>
 #include <stdbool.h>
 
 #define MB2_MAGIC_VAL 0x36D76289u
 #define TAG_END  0u
 #define TAG_MMAP 6u
+#define TAG_FB   8u
 
 typedef struct __attribute__((packed)) { uint32_t total, reserved; } mb2_hdr_t;
 typedef struct __attribute__((packed)) { uint32_t type, size;      } mb2_tag_t;
@@ -15,6 +17,39 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint64_t base, len; uint32_t type, _res;
 } mb2_mmap_entry_t;
+typedef struct __attribute__((packed)) {
+    uint32_t type, size;
+    uint64_t addr;
+    uint32_t pitch;     /* bytes per row */
+    uint32_t width;
+    uint32_t height;
+    uint8_t  bpp;
+    uint8_t  fb_type;   /* 1 = RGB, 2 = EGA text */
+    uint16_t _res;
+} mb2_fb_tag_t;
+
+/* ── called early from kernel_main, before fb_init() ── */
+void mb2_parse(uint32_t magic, uint64_t info_addr) {
+    if (magic != MB2_MAGIC_VAL) return;
+    mb2_hdr_t *hdr = (mb2_hdr_t*)(uintptr_t)info_addr;
+    uint8_t   *ptr = (uint8_t*)hdr + 8;
+    uint8_t   *end = (uint8_t*)hdr + hdr->total;
+
+    while (ptr + sizeof(mb2_tag_t) <= end) {
+        mb2_tag_t *tag = (mb2_tag_t*)ptr;
+        if (tag->type == TAG_END) break;
+
+        if (tag->type == TAG_FB) {
+            mb2_fb_tag_t *fb = (mb2_fb_tag_t*)ptr;
+            if (fb->fb_type == 1) {          /* RGB linear framebuffer */
+                fb_set_info(fb->addr, fb->pitch,
+                            fb->width, fb->height, fb->bpp);
+            }
+        }
+
+        ptr += (tag->size + 7) & ~7u;
+    }
+}
 
 static const char *mmap_type(uint32_t t) {
     switch(t){case 1:return "Usable  ";case 2:return "Reserved";

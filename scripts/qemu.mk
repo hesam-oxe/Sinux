@@ -2,7 +2,7 @@ OVMF      := edk2/OVMF.4m.fd
 ISO       := $(BUILD)/iso/sinux.iso
 DISK      := sinux.img
 QEMU      := qemu-system-x86_64
-QEMU_BASE := -cdrom $(ISO) -m 256M
+QEMU_BASE := -cdrom $(ISO) -m 256M -device bochs-display
 QEMU_DISK := -drive file=$(DISK),format=raw,if=ide,index=0,media=disk
 QEMU_DBG  := -d int,cpu_reset -D /tmp/sinux_qemu.log
 

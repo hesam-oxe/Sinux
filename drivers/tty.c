@@ -1,19 +1,26 @@
 #include "tty.h"
-#include "vga.h"
 #include "serial.h"
+#include "fb.h"
+#include "bga.h"
 
 void tty_init(void) {
     serial_init();
-    vga_init();
+    /* fb is initialized later from kernel_main, after vmm_init()
+       maps the BGA framebuffer physical address */
 }
 
-void tty_putc(char c) { vga_putc(c); serial_putc(c); }
+void tty_putc(char c) {
+    fb_putc(c);
+    serial_putc(c);
+}
 void tty_puts(const char *s) { while(*s) tty_putc(*s++); }
 
-void tty_setcolor_info(void)  { vga_setcolor(LCYAN,  BLACK); }
-void tty_setcolor_err(void)   { vga_setcolor(LRED,   BLACK); }
-void tty_setcolor_ok(void)    { vga_setcolor(LGREEN, BLACK); }
-void tty_setcolor_reset(void) { vga_setcolor(WHITE,  BLACK); }
+void tty_setcolor_info(void)  { fb_set_fg(FB_CYAN);  }
+void tty_setcolor_err(void)   { fb_set_fg(FB_RED);   }
+void tty_setcolor_ok(void)    { fb_set_fg(FB_GREEN); }
+void tty_setcolor_reset(void) { fb_set_fg(FB_WHITE); }
+
+void tty_clear(void) { fb_init(); }   /* clears screen and resets cursor */
 
 /* ───────────────────────────────────────────────
  * TTY character device  (/dev/tty0)

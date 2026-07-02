@@ -19,3 +19,12 @@ static inline uint16_t inw(uint16_t p) {
     __asm__ volatile ("inw %1,%0" : "=a"(v) : "Nd"(p) : "memory");
     return v;
 }
+
+static inline void outl(uint16_t p, uint32_t v) {
+    __asm__ volatile ("outl %0,%1" :: "a"(v),"Nd"(p) : "memory");
+}
+static inline uint32_t inl(uint16_t p) {
+    uint32_t v;
+    __asm__ volatile ("inl %1,%0" : "=a"(v) : "Nd"(p) : "memory");
+    return v;
+}
