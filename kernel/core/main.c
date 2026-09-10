@@ -165,6 +165,95 @@ static void cmd_stat(const char *path) {
            full, ino->type<7?types[ino->type]:"?", ino->size);
 }
 
+/* ── rootfs seeding: copy distro tools from disk into ramfs ────
+ *
+ * The kernel's root VFS is an in-memory ramfs, but the distribution
+ * (/sbin/init, /bin/sinush, /bin/ls, ...) lives on the ext2 disk
+ * image (populated at build time).  After the disk is mounted at
+ * /mnt/disk, copy every regular file from its /sbin and /bin into
+ * the ramfs /sbin and /bin, so proc_spawn_init() finds /sbin/init
+ * and userland finds its tools at canonical paths.
+ *
+ * Uses only existing VFS primitives (open/read/readdir/write).
+ * If the disk is absent or has no distro tools, this is a silent
+ * no-op and boot falls back to the kernel shell as before.
+ */
+#define SEED_MAX_FILE (12 * 4096)
+
+static void
+seed_file_from_disk(const char *src, const char *dst)
+{
+    file_t *fin = vfs_open(src, O_RDONLY);
+    if (!fin) return;
+    if (fin->inode->type != FT_REG) { vfs_close(fin); return; }
+
+    uint64_t sz = fin->inode->size;
+    if (sz == 0 || sz > SEED_MAX_FILE) {
+        printk(KERN_WARNING "rootfs: skipping %s (size %u bytes)\n",
+               src, sz);
+        vfs_close(fin);
+        return;
+    }
+
+    uint8_t *buf = kmalloc((size_t)sz);
+    if (!buf) { vfs_close(fin); return; }
+    int64_t n = vfs_read(fin, buf, (size_t)sz);
+    vfs_close(fin);
+    if (n != (int64_t)sz) {
+        printk(KERN_WARNING "rootfs: short read on %s\n", src);
+        kfree(buf);
+        return;
+    }
+
+    file_t *fout = vfs_open(dst, O_WRONLY | O_CREAT | O_TRUNC);
+    if (!fout) {
+        printk(KERN_WARNING "rootfs: cannot create %s\n", dst);
+        kfree(buf);
+        return;
+    }
+    vfs_write(fout, buf, (size_t)sz);
+    vfs_close(fout);
+    kfree(buf);
+
+    printk(KERN_INFO "rootfs: %s -> %s (%u bytes)\n", src, dst, sz);
+}
+
+static void
+seed_dir_from_disk(const char *sdir, const char *ddir)
+{
+    file_t *f = vfs_open(sdir, O_RDONLY);
+    if (!f) return;
+    if (f->inode->type != FT_DIR) { vfs_close(f); return; }
+
+    dentry_t d;
+    char src[256], dst[256];
+    while (vfs_readdir(f, &d)) {
+        if (!d.name[0]) continue;
+        if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+        path_join(sdir, d.name, src, sizeof(src));
+        path_join(ddir, d.name, dst, sizeof(dst));
+        seed_file_from_disk(src, dst);
+    }
+    vfs_close(f);
+}
+
+static void
+seed_rootfs_from_disk(void)
+{
+    vfs_create("/sbin", FT_DIR);
+    seed_dir_from_disk("/mnt/disk/sbin", "/sbin");
+    seed_dir_from_disk("/mnt/disk/bin", "/bin");
+
+    file_t *f = vfs_open("/sbin/init", O_RDONLY);
+    if (f) {
+        vfs_close(f);
+        printk(KERN_INFO "rootfs: /sbin/init ready\n");
+    } else {
+        printk(KERN_WARNING "rootfs: /sbin/init missing "
+                            "(disk without distro tools?)\n");
+    }
+}
+
 /* ── shell ───────────────────────────────────────────── */
 static void
 shell(void)
@@ -344,6 +433,10 @@ kernel_main(uint32_t mb2_magic, uint64_t mb2_info)
     vfs_create("/usr",  FT_DIR);
 
     kstrcpy(cwd, "/root");
+
+    /* Copy /sbin and /bin from the distro disk into the root ramfs
+     * so proc_spawn_init() finds /sbin/init (no-op without disk). */
+    seed_rootfs_from_disk();
 
     /* Phase 0 self-tests (PMM + VFS). Results go to serial;
      * boot continues regardless — the test harness judges. */
