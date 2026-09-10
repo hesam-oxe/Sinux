@@ -23,3 +23,4 @@ int64_t syscall_entry(uint64_t nr,
 #define SYS_PIPE     22
 #define SYS_KILL     62
 #define SYS_SIGACTION 13
+#define SYS_GETDENTS 78

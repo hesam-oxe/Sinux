@@ -15,5 +15,6 @@
 #define SYS_KILL    62
 #define SYS_GETPPID 110
 #define SYS_SLEEP   162
+#define SYS_GETDENTS 78
 
 int64_t syscall(uint64_t nr, ...);
