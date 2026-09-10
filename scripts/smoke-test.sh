@@ -18,11 +18,14 @@ TIMEOUT_S="${SMOKE_TIMEOUT:-120}"
 [ -f "$ISO" ]  || { echo "[FAIL] $ISO not found (run 'make iso' first)"; exit 1; }
 [ -f "$DISK" ] || { echo "[FAIL] $DISK not found (run 'make iso' first)"; exit 1; }
 
-echo "[..] booting $ISO in QEMU (headless, ${TIMEOUT_S}s timeout)..."
+echo "[..] booting $ISO in QEMU (headless, SMP-2, ${TIMEOUT_S}s timeout)..."
 timeout --signal=TERM --kill-after=10s "$TIMEOUT_S" \
   qemu-system-x86_64 \
     -cdrom "$ISO" -m 256M -device bochs-display \
+    -smp 2 \
     -drive "file=${DISK},format=raw,if=ide,index=0,media=disk" \
+    -drive "file=${DISK},format=raw,if=none,id=vdrv,readonly=on" \
+    -device virtio-blk-pci,drive=vdrv \
     -nographic -serial mon:stdio -no-reboot \
     > "$LOG" 2>&1 || code=$?
 code=${code:-0}
@@ -38,12 +41,24 @@ check_absent() {
   else echo "[OK] absent as expected: $1"; fi
 }
 
-# Boot banner (tty_puts -> serial), memory line, and the expected end
-# state: no init ELF exists yet, so the kernel must reach its shell.
+# Boot banner (tty_puts -> serial), memory line, kernel self-tests.
 check_present "Made By SUN"
 check_present "RAM:"
 check_present "ktest: ALL TESTS PASSED"
-check_present "falling back to kernel shell"
+# SMP: booted with -smp 2, both CPUs must come online.
+check_present "smp: Total CPUs online: 2"
+# Distro disk: ext2 mount, rootfs seeding, init spawn.
+check_present "ext2: mounted /mnt/disk"
+check_present "rootfs: /sbin/init ready"
+check_present "queued from /sbin/init"
+# virtio-blk data path self-test (read-only attached drive).
+check_present "virtio-blk: self-test read OK"
+# Interactive shell: prompt plus self-test transcript responses.
+check_present "sinux>"
+check_present "Sinux speaks!"
+check_present "sinush"
+# The kernel fallback shell must NOT appear: userland owns the console.
+check_absent  "falling back to kernel shell"
 check_absent  "panic"
 
 if [ "$fail" -ne 0 ]; then

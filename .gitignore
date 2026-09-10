@@ -8,6 +8,9 @@ node_modules/
 # Logs and temp files
 *.log
 *.tmp
+# Sinux build outputs
+build/
+sinux.img
 # Editors
 .vscode/
 .idea/

@@ -45,6 +45,9 @@ all: $(TARGET) userspace
 
 userspace:
 	$(MAKE) -C userspace/libc
+	$(MAKE) -C userspace/init
+	$(MAKE) -C userspace/sinush
+	$(MAKE) -C userspace/coreutils
 	$(MAKE) -C userspace/hello
 
 $(TARGET): $(OBJS) arch/$(ARCH)/linker.ld | $(BUILD)
@@ -63,5 +66,8 @@ test: iso
 clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C userspace/libc clean
+	$(MAKE) -C userspace/init clean
+	$(MAKE) -C userspace/sinush clean
+	$(MAKE) -C userspace/coreutils clean
 	$(MAKE) -C userspace/hello clean
 	@echo "[OK] Cleaned"
