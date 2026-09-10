@@ -17,6 +17,7 @@
 #include "../../arch/x86_64/smp/lock.h"
 #include "../../drivers/tty.h"
 #include "../../drivers/ata.h"
+#include "../../drivers/virtio_blk.h"
 #include "../../drivers/fb.h"
 #include "../../drivers/bga.h"
 #include "../../drivers/keyboard.h"
@@ -423,6 +424,10 @@ kernel_main(uint32_t mb2_magic, uint64_t mb2_info)
         else
             printk(KERN_WARNING "fs: no ext2 on disk\n");
     }
+
+    /* Legacy virtio-blk (if QEMU provides one): polled self-test.
+     * The boot disk stays on ATA/IDE; this is the virtio data path. */
+    virtio_blk_init();
 
     vfs_create("/root", FT_DIR);
     vfs_create("/home", FT_DIR);

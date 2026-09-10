@@ -84,3 +84,49 @@ pci_find_vga_bar0(void)
     }
     return 0;
 }
+
+int
+pci_find_device(uint16_t vendor, uint16_t device,
+                uint8_t *bus, uint8_t *dev, uint8_t *func)
+{
+    for (uint16_t b = 0; b < 256; b++) {
+        for (uint8_t d = 0; d < 32; d++) {
+            uint32_t id = pci_config_read32((uint8_t)b, d, 0, 0x00);
+            if ((id & 0xFFFF) != vendor) continue;
+            if (((id >> 16) & 0xFFFF) != device) continue;
+            if (bus)  *bus  = (uint8_t)b;
+            if (dev)  *dev  = d;
+            if (func) *func = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+uint64_t
+pci_read_bar(uint8_t bus, uint8_t dev, uint8_t func, int bar)
+{
+    if (bar < 0 || bar > 5) return 0;
+
+    uint8_t  off = (uint8_t)(0x10 + bar * 4);
+    uint32_t lo  = pci_config_read32(bus, dev, func, off);
+
+    if (lo & 0x1)
+        return (uint64_t)(lo & ~0x3u);   /* I/O space */
+
+    uint32_t type = (lo >> 1) & 0x3;
+    uint64_t addr = lo & 0xFFFFFFF0u;
+    if (type == 0x2 && bar < 5) {
+        uint32_t hi = pci_config_read32(bus, dev, func, (uint8_t)(off + 4));
+        addr |= ((uint64_t)hi << 32);    /* 64-bit memory BAR */
+    }
+    return addr;
+}
+
+void
+pci_write_cmd(uint8_t bus, uint8_t dev, uint8_t func, uint16_t bits)
+{
+    uint32_t cmd = pci_config_read32(bus, dev, func, 0x04);
+    cmd |= bits;
+    pci_config_write32(bus, dev, func, 0x04, cmd);
+}
