@@ -1,173 +1,62 @@
 /*
  * Sinux init — PID 1, runs in ring 3
  *
- * This is the first user-space process.  It receives control from
+ * The first user-space process.  It receives control from
  * fork_child_stub (via sysretq) with a proper SysV AMD64 initial
  * stack (argc / argv / envp).
  *
- * Responsibilities at this stage:
+ * Responsibilities:
  *   • Prove ring-3 isolation: all I/O goes through syscalls
- *   • Provide a simple interactive shell for development
- *   • Reap zombie children with wait4()
+ *   • Spawn /bin/sinush as the system shell
+ *   • Reap it with wait4() and respawn it if it ever exits
+ *     (classic init behaviour — the machine always has a shell)
  *
- * Build:
- *   x86_64-elf-gcc -ffreestanding -nostdlib -static \
- *       -o /sbin/init init.c ../libc/src/syscall_wrap.S \
- *       ../libc/src/start.S ../libc/src/string.c
- *
- * Then place the resulting ELF in VFS at /sbin/init.
+ * Build: make -C userspace/init   (needs ../libc/libc.a first)
+ * Install: /sbin/init on the Sinux disk image; at boot the kernel
+ * copies it into the root ramfs, then proc_spawn_init() runs it.
  */
 
-#include "../libc/include/syscall.h"
-#include "../libc/include/types.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <syscall.h>
 
-/* ── minimal libc ──────────────────────────────────────────────── */
-static int64_t
-xwrite(int fd, const char *s, uint64_t n)
-{
-    return syscall(SYS_WRITE, (uint64_t)fd, (uint64_t)s, n);
-}
-
-static int64_t
-xread(int fd, char *buf, uint64_t n)
-{
-    return syscall(SYS_READ, (uint64_t)fd, (uint64_t)buf, n);
-}
-
-static void
-puts_fd(int fd, const char *s)
-{
-    uint64_t len = 0;
-    while (s[len]) len++;
-    xwrite(fd, s, len);
-}
-
-static int
-strcmp(const char *a, const char *b)
-{
-    while (*a && *a == *b) { a++; b++; }
-    return (unsigned char)*a - (unsigned char)*b;
-}
-
-static uint64_t
-strlen(const char *s)
-{
-    uint64_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-/* ── simple shell ──────────────────────────────────────────────── */
-#define STDIN  0
-#define STDOUT 1
-#define STDERR 2
-
-#define MAX_ARGS 16
-#define BUF_SIZE 256
-
-static int
-parse(char *line, char **argv, int max)
-{
-    int argc = 0;
-    char *p = line;
-    while (*p && argc < max) {
-        while (*p == ' ') p++;
-        if (!*p) break;
-        argv[argc++] = p;
-        while (*p && *p != ' ') p++;
-        if (*p) { *p = '\0'; p++; }
-    }
-    argv[argc] = (char *)0;
-    return argc;
-}
-
-static void
-run_command(int argc, char **argv)
-{
-    if (argc == 0) return;
-
-    /* built-ins */
-    if (!strcmp(argv[0], "exit")) {
-        puts_fd(STDOUT, "init: bye\n");
-        syscall(SYS_EXIT, 0, 0, 0);
-    }
-
-    if (!strcmp(argv[0], "help")) {
-        puts_fd(STDOUT,
-            "  exit           — exit init\n"
-            "  getpid         — print PID\n"
-            "  help           — this list\n"
-            "  (any path)     — fork + execve that binary\n");
-        return;
-    }
-
-    if (!strcmp(argv[0], "getpid")) {
-        int64_t pid = syscall(SYS_GETPID, 0, 0, 0);
-        char buf[32];
-        /* itoa */
-        int i = 30; buf[31] = '\0';
-        if (pid == 0) { buf[i--] = '0'; } else {
-            int64_t v = pid;
-            while (v > 0) { buf[i--] = '0' + (int)(v % 10); v /= 10; }
-        }
-        puts_fd(STDOUT, "PID ");
-        puts_fd(STDOUT, buf + i + 1);
-        puts_fd(STDOUT, "\n");
-        return;
-    }
-
-    /* fork + execve */
-    char *envp[] = { "PATH=/bin:/sbin", "HOME=/root", (char *)0 };
-
-    int64_t child = syscall(SYS_FORK, 0, 0, 0);
-    if (child < 0) {
-        puts_fd(STDERR, "init: fork failed\n");
-        return;
-    }
-    if (child == 0) {
-        /* child: exec the command */
-        syscall(SYS_EXECVE, (uint64_t)argv[0],
-                             (uint64_t)argv,
-                             (uint64_t)envp);
-        puts_fd(STDERR, "init: exec failed: ");
-        puts_fd(STDERR, argv[0]);
-        puts_fd(STDERR, "\n");
-        syscall(SYS_EXIT, 1, 0, 0);
-    }
-
-    /* parent: wait for child */
-    int status = 0;
-    syscall(SYS_WAIT4, (uint64_t)child, (uint64_t)&status, 0);
-}
+static char *shell_argv[] = { "sinush", NULL };
+static char *shell_envp[] = {
+    "PATH=/bin:/sbin",
+    "HOME=/root",
+    "TERM=vt100",
+    NULL
+};
 
 int
-main(int argc, char **argv, char **envp)
+main(int argc, char *argv[], char *envp[])
 {
-    (void)envp;
+    (void)argc; (void)argv; (void)envp;
 
-    puts_fd(STDOUT, "\n*** Sinux init (PID 1, ring 3) ***\n");
-    puts_fd(STDOUT, "Type 'help' for commands.\n\n");
-
-    char line[BUF_SIZE];
-    char *args[MAX_ARGS];
+    printf("\n*** Sinux init (PID %d, ring 3) ***\n",
+           (long long)getpid());
 
     for (;;) {
-        /* reap any zombie children */
-        while (syscall(SYS_WAIT4, (uint64_t)-1,
-                       (uint64_t)0, 1 /* WNOHANG */) > 0)
-            ;
+        printf("init: launching /bin/sinush ...\n");
 
-        puts_fd(STDOUT, "init# ");
+        pid_t child = fork();
+        if (child < 0) {
+            printf("init: fork failed, retrying...\n");
+            sleep(1);
+            continue;
+        }
 
-        int64_t n = xread(STDIN, line, BUF_SIZE - 1);
-        if (n <= 0) continue;
+        if (child == 0) {
+            execve("/bin/sinush", shell_argv, shell_envp);
+            printf("init: cannot exec /bin/sinush\n");
+            _exit(1);
+        }
 
-        /* strip newline */
-        if (n > 0 && line[n - 1] == '\n') n--;
-        line[n] = '\0';
-
-        int nargs = parse(line, args, MAX_ARGS);
-        run_command(nargs, args);
+        int   status = 0;
+        pid_t w      = wait4(child, &status, 0);
+        printf("init: shell (PID %d) exited, respawning...\n",
+               (long long)w);
+        sleep(1);
     }
 
     return 0;
