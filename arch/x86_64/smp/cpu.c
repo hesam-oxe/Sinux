@@ -1,12 +1,12 @@
 #include "cpu.h"
-#include "../../lib/io.h"
-#include "../../lib/printk.h"
-#include "../../lib/string.h"
+#include "../../../lib/io.h"
+#include "../../../lib/printk.h"
+#include "../../../lib/string.h"
 #include "../gdt.h"
 #include "../idt.h"
 #include "../pic.h"
-#include "../../mm/pmm.h"
-#include "../../mm/vmm.h"
+#include "../../../mm/pmm.h"
+#include "../../../mm/vmm.h"
 
 /* ── LAPIC/IOAPIC Register Definitions ───────────────────────────── */
 #define LAPIC_BASE_MSR       0x1B
