@@ -20,3 +20,7 @@ char serial_getc(void) {
     while (!(inb(COM1+5) & 0x01)) {}
     return (char)inb(COM1);
 }
+
+bool serial_has_data(void) {
+    return (inb(COM1+5) & 0x01) != 0;
+}
