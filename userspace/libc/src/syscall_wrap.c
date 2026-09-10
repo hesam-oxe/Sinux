@@ -17,6 +17,7 @@ pid_t   getppid(void)                       { return (pid_t)syscall(SYS_GETPPID)
 pid_t   fork(void)                          { return (pid_t)syscall(SYS_FORK); }
 void    _exit(int code)                     { syscall(SYS_EXIT, (uint64_t)code); for(;;); }
 int     pipe(int fds[2])                    { return (int)syscall(SYS_PIPE, (uint64_t)fds); }
+pid_t   wait4(pid_t pid, int *st, int opt)  { return (pid_t)syscall(SYS_WAIT4, (uint64_t)pid, (uint64_t)st, (uint64_t)opt); }
 int     kill(pid_t pid, int sig)            { return (int)syscall(SYS_KILL, (uint64_t)pid, (uint64_t)sig); }
 unsigned int sleep(unsigned int s)          { syscall(SYS_SLEEP, (uint64_t)s, 0); return 0; }
 

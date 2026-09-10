@@ -16,8 +16,6 @@ unsigned int sleep(unsigned int secs);
 /* Directory listing: NUL-separated names into buf, returns entry
  * count or negative errno.  Kernel: SYS_GETDENTS (78). */
 int     getdents(const char *path, char *buf, size_t len);
-int     execve(const char *path, char *const argv[], char *const envp[]);
-void    _exit(int code);
-int     pipe(int fds[2]);
-int     kill(pid_t pid, int sig);
-unsigned int sleep(unsigned int secs);
+
+/* Reap a child: blocks until pid exits, stores exit code. */
+pid_t   wait4(pid_t pid, int *status, int options);
