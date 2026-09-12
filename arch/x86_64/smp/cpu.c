@@ -342,6 +342,10 @@ void trampoline_start(void) {
         "trampoline_gdt_desc:\n\t"
         ".word trampoline_gdt_desc - trampoline_gdt - 1\n\t"
         ".quad trampoline_gdt\n\t"
+        /* Restore the assembler to 64-bit mode: .code16/.code32 above
+         * leak past the asm block and would make GCC assemble the rest
+         * of this translation unit in 32-bit mode. */
+        ".code64\n\t"
     );
 }
 
