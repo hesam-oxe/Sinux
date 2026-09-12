@@ -62,13 +62,6 @@
 #define LAPIC_TRIGGER_EDGE      0x00000
 #define LAPIC_TRIGGER_LEVEL     0x08000
 
-/* IPI Vectors */
-#define IPI_VECTOR_INIT         0x00
-#define IPI_VECTOR_STARTUP      0x00
-#define IPI_VECTOR_RESCHED      0xFA
-#define IPI_VECTOR_TLB_FLUSH    0xFB
-#define IPI_VECTOR_SPURIOUS     0xFF
-
 /* IOAPIC Registers */
 #define IOAPIC_REG_SELECT       0x00
 #define IOAPIC_REG_WINDOW       0x10

@@ -33,6 +33,13 @@ extern cpu_data_t cpu_data[MAX_CPUS];
 extern int        num_cpus;
 extern int        bsp_cpu_id;
 
+/* IPI vectors */
+#define IPI_VECTOR_INIT         0x00
+#define IPI_VECTOR_STARTUP      0x00
+#define IPI_VECTOR_RESCHED      0xFA
+#define IPI_VECTOR_TLB_FLUSH    0xFB
+#define IPI_VECTOR_SPURIOUS     0xFF
+
 /* Core SMP functions */
 void smp_init(void);
 void smp_bringup_aps(void);
