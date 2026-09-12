@@ -12,7 +12,7 @@ SECTIONS {
         _trampoline_start = .;
         *(.trampoline .trampoline.*)
         _trampoline_end = .;
-        ASSERT((_trampoline_end - _trampoline_start) <= 0x1000, "Trampoline too large")
+        ASSERT((_trampoline_end - _trampoline_start) <= 0x1000, "Trampoline too large");
     }
     
     .bss    ALIGN(4K) : { *(COMMON) *(.bss .bss.*) }
