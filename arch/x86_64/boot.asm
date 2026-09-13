@@ -292,31 +292,55 @@ isr_tlb_flush:
 
 ; ── User context save area (for fork) ──────────────────────────────
 section .bss
-global user_ctx_rip, user_ctx_rflags, user_ctx_rsp
+global user_ctx_rip, user_ctx_rflags, user_ctx_rsp, user_ctx_nr
 user_ctx_rip:    resq 1
 user_ctx_rflags: resq 1
 user_ctx_rsp:    resq 1
+user_ctx_nr:     resq 1
 section .text
 
 global syscall_asm_entry
+extern gdt_kernel_stack
 syscall_asm_entry:
 
     ; Capture user state BEFORE any stack changes — fork() reads these
     mov [user_ctx_rip],    rcx   ; user RIP  (SYSCALL saves RIP → RCX)
     mov [user_ctx_rflags], r11   ; user RFLAGS (SYSCALL saves RFLAGS → R11)
     mov [user_ctx_rsp],    rsp   ; user RSP (unchanged at SYSCALL entry)
+    mov [user_ctx_nr],     rax   ; syscall number (SYSCALL ABI: nr in RAX)
 
-    push rcx
-    push r11
-    push rbp
+    ; Kernel C code must run on the current process's KERNEL stack, not
+    ; the user stack: a syscall that sleeps (wait4/sleep) or gets
+    ; preempted would otherwise leave its frame where user code can
+    ; overwrite it. gdt_kernel_stack mirrors TSS.rsp0, which do_switch()
+    ; keeps set to the running process's kernel stack.
+    mov rsp, [rel gdt_kernel_stack]
 
-    mov  rcx, r10
+    ; Save the user context on THIS kernel stack for the return path.
+    ; The user_ctx_* globals cannot be trusted across a schedule: another
+    ; process's syscall would overwrite them while this one sleeps.
+    push qword [rel user_ctx_rsp]
+    push qword [rel user_ctx_rflags]
+    push qword [rel user_ctx_rip]
+    push qword 0                       ; 16-byte alignment padding
+
+    ; Linux-style register ABI (rax=nr, rdi=a1, rsi=a2, rdx=a3, r10=a4,
+    ; r8=a5, r9=a6) → C calling convention for
+    ; syscall_entry(nr, a1, a2, a3, a4, a5, a6):
+    mov  r9,  r8                       ; C a5 ← a5
+    mov  r8,  r10                      ; C a4 ← a4
+    mov  rcx, rdx                      ; C a3 ← a3
+    mov  rdx, rsi                      ; C a2 ← a2
+    mov  rsi, rdi                      ; C a1 ← a1
+    mov  rdi, [rel user_ctx_nr]        ; C nr ← nr (RAX at entry)
 
     call syscall_entry
-
-    pop  rbp
-    pop  r11
-    pop  rcx
+    ; RAX = result. SYSRET takes RIP from RCX and RFLAGS from R11 and
+    ; does NOT restore RSP — reload the user context saved above.
+    add  rsp, 8                        ; drop alignment padding
+    pop  rcx                           ; user RIP
+    pop  r11                           ; user RFLAGS
+    pop  rsp                           ; user RSP
     o64 sysret
 
 ; ── fork child trampoline ───────────────────────────────────────────
