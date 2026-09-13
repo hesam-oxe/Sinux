@@ -140,6 +140,15 @@ void lapic_init(void) {
     
     lapic_base = (lo & 0xFFFFFF000ULL);
     lapic_enabled = true;
+
+    /* Map the LAPIC MMIO page: the kernel VMM keeps no identity mapping for
+     * this region, so the first register access below would page-fault. */
+    vmm_map_range(
+            vmm_kernel_pml4(),
+            lapic_base,
+            lapic_base,
+            PAGE_SIZE,
+            VMM_PRESENT | VMM_WRITABLE);
     
     /* Enable LAPIC */
     uint32_t svrr = lapic_read(LAPIC_SVRR);
@@ -154,7 +163,12 @@ void lapic_init(void) {
     lapic_write(LAPIC_LVT_TIMER,    LAPIC_TIMER_PERIODIC | 0x10000);
     lapic_write(LAPIC_LVT_THERMAL,  0x10000);
     lapic_write(LAPIC_LVT_PERF,     0x10000);
-    lapic_write(LAPIC_LVT_LINT0,    0x10000);
+    /* LINT0 carries the legacy 8259 PIC output on a PC, and this kernel
+     * keeps driving the PIT timer and keyboard IRQs through the PIC
+     * (pic_init/pit_init). Leaving LINT0 masked here would cut off every
+     * PIC interrupt — including the scheduler tick. Route it in ExtInt
+     * mode instead. LINT1 (chipset NMI) stays masked. */
+    lapic_write(LAPIC_LVT_LINT0,    0x0700);   /* ExtInt, unmasked */
     lapic_write(LAPIC_LVT_LINT1,    0x10000);
     lapic_write(LAPIC_LVT_ERROR,    0x10000);
     
@@ -168,6 +182,14 @@ void lapic_init(void) {
 void ioapic_init(void) {
     /* IOAPIC is typically at 0xFEC00000 on QEMU */
     ioapic_base = 0xFEC00000ULL;
+
+    /* Map the IOAPIC MMIO page (same reason as the LAPIC mapping above). */
+    vmm_map_range(
+            vmm_kernel_pml4(),
+            ioapic_base,
+            ioapic_base,
+            PAGE_SIZE,
+            VMM_PRESENT | VMM_WRITABLE);
     
     uint32_t ver = ioapic_read(IOAPIC_REG_VER);
     int max_redir = (ver >> 16) & 0xFF;
@@ -263,84 +285,14 @@ void smp_cpu_halt(int cpu_id) {
 
 /* ── AP Startup Code (Trampoline) ───────────────────────────────── */
 extern uint8_t _trampoline_start[], _trampoline_end[];
-extern uint64_t _trampoline_pml4;
-extern uint64_t _trampoline_stack_top;
-extern uint64_t _trampoline_long_mode_entry;
+/* Parameter slots patched by the BSP inside the trampoline copy at
+ * 0x7000 (definitions live in trampoline.asm). */
+extern uint64_t _trampoline_pml4_slot;
+extern uint64_t _trampoline_stack_slot;
+extern uint64_t _trampoline_entry_slot;
+extern uint64_t _trampoline_cpu_id_slot;
 
-void ap_entry(void);
-
-/* Trampoline code must be in low memory (below 1MB) for SIPI */
-__attribute__((section(".trampoline")))
-void trampoline_start(void) {
-    /* This code runs in real mode, then protected mode, then long mode */
-    __asm__ volatile(
-        ".code16\n\t"
-        "cli\n\t"
-        "xor %ax, %ax\n\t"
-        "mov %ax, %ds\n\t"
-        "mov %ax, %es\n\t"
-        "mov %ax, %ss\n\t"
-        "mov $0x8000, %esp\n\t"
-        
-        /* Enable A20 */
-        "in $0x92, %al\n\t"
-        "or $0x02, %al\n\t"
-        "out %al, $0x92\n\t"
-        
-        /* Load GDT and enter protected mode */
-        "lgdt trampoline_gdt_desc\n\t"
-        "mov %cr0, %eax\n\t"
-        "or $1, %eax\n\t"
-        "mov %eax, %cr0\n\t"
-        "ljmp $0x08, $trampoline_prot_mode\n\t"
-        
-        ".code32\n\t"
-        "trampoline_prot_mode:\n\t"
-        "mov $0x10, %ax\n\t"
-        "mov %ax, %ds\n\t"
-        "mov %ax, %es\n\t"
-        "mov %ax, %fs\n\t"
-        "mov %ax, %gs\n\t"
-        "mov %ax, %ss\n\t"
-        "mov $_trampoline_stack_top, %esp\n\t"
-        
-        /* Enable PAE and PGE */
-        "mov %cr4, %eax\n\t"
-        "or $(1<<5)|(1<<4), %eax\n\t"
-        "mov %eax, %cr4\n\t"
-        
-        /* Load CR3 with PML4 */
-        "mov _trampoline_pml4, %eax\n\t"
-        "mov %eax, %cr3\n\t"
-        
-        /* Enable Long Mode */
-        "mov $0xC0000080, %ecx\n\t"
-        "rdmsr\n\t"
-        "or $(1<<8), %eax\n\t"
-        "wrmsr\n\t"
-        
-        /* Enable Paging */
-        "mov %cr0, %eax\n\t"
-        "or $(1<<31)|(1<<0), %eax\n\t"
-        "mov %eax, %cr0\n\t"
-        
-        /* Jump to long mode */
-        "ljmp $0x08, $_trampoline_long_mode_entry\n\t"
-        
-        ".align 16\n\t"
-        "trampoline_gdt:\n\t"
-        ".quad 0\n\t"
-        ".quad 0x00AF9A000000FFFF  /* Code segment */\n\t"
-        ".quad 0x00CF92000000FFFF  /* Data segment */\n\t"
-        "trampoline_gdt_desc:\n\t"
-        ".word trampoline_gdt_desc - trampoline_gdt - 1\n\t"
-        ".quad trampoline_gdt\n\t"
-        /* Restore the assembler to 64-bit mode: .code16/.code32 above
-         * leak past the asm block and would make GCC assemble the rest
-         * of this translation unit in 32-bit mode. */
-        ".code64\n\t"
-    );
-}
+void ap_entry(int cpu_id);
 
 /* ── AP Bring-up ────────────────────────────────────────────────── */
 void smp_bringup_aps(void) {
@@ -379,9 +331,10 @@ void smp_bringup_aps(void) {
         cpu_data[cpu_id].stack_top = (uint64_t)(cpu_data[cpu_id].stack_base + 16384);
         
         /* Set trampoline parameters */
-        _trampoline_pml4 = (uint64_t)vmm_kernel_pml4();
-        _trampoline_stack_top = cpu_data[cpu_id].stack_top;
-        _trampoline_long_mode_entry = (uint64_t)ap_entry;
+        _trampoline_pml4_slot = (uint64_t)(uintptr_t)vmm_kernel_pml4();
+        _trampoline_stack_slot = cpu_data[cpu_id].stack_top;
+        _trampoline_entry_slot = (uint64_t)(uintptr_t)ap_entry;
+        _trampoline_cpu_id_slot = (uint64_t)cpu_id;
         
         printk(KERN_INFO "smp: Sending INIT to APIC ID %d\n", apic_id);
         
@@ -414,15 +367,15 @@ void smp_bringup_aps(void) {
 }
 
 /* ── AP Entry Point (called after AP boots) ─────────────────────── */
-void ap_entry(void) {
-    int cpu_id = get_current_cpu_id();
-    
-    /* Initialize per-CPU structures */
+void ap_entry(int cpu_id) {
+    /* Reload the kernel GDT/IDT on this AP (the trampoline used its own). */
     gdt_init();
     idt_init();
     
-    /* Enable interrupts on this AP */
+    /* Enable this AP's LAPIC. The legacy PIC is handled by the BSP
+     * alone: keep LINT0 masked here so PIC IRQs never land on an AP. */
     lapic_write(LAPIC_TPR, 0);
+    lapic_write(LAPIC_LVT_LINT0, 0x10000);
     lapic_write(LAPIC_SVRR, lapic_read(LAPIC_SVRR) | 0x100);
     
     /* Mark CPU as running */
@@ -443,13 +396,10 @@ void ap_entry(void) {
 
 /* ── Main SMP Initialization ────────────────────────────────────── */
 
-/* Trampoline variables - defined in linker script */
-uint64_t _trampoline_pml4 = 0;
-uint64_t _trampoline_stack_top = 0;
-uint64_t _trampoline_long_mode_entry = 0;
+
 
 /* TSC frequency (calibrated during boot) */
-static uint64_t tsc_freq = 0;
+uint64_t tsc_freq = 0;
 
 /* Calibrate TSC using CPUID */
 static void calibrate_tsc(void) {
