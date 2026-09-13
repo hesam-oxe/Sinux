@@ -1,7 +1,7 @@
 CC     := gcc
 AS     := nasm
 AR     := ar
-CFLAGS := -m64 -ffreestanding -nostdlib -nostdinc \
+CFLAGS := -m64 -ffreestanding -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) \
           -O2 -Wall -Iinclude \
           -mno-red-zone -mno-sse -mno-sse2 \
           -fno-stack-protector
