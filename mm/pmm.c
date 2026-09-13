@@ -166,5 +166,35 @@ pmm_free(void *page)
     }
 }
 
+void *
+pmm_alloc_contig(size_t count)
+{
+    if (count == 0 || count > total_pages) return NULL;
+    for (size_t i = 0; i + count <= total_pages; i++) {
+        bool run = true;
+        for (size_t j = 0; j < count; j++) {
+            if (bm_test(i + j)) {
+                /* skip past the allocated page that broke the run */
+                i += j;
+                run = false;
+                break;
+            }
+        }
+        if (!run) continue;
+        for (size_t j = 0; j < count; j++) bm_set(i + j);
+        free_pages -= count;
+        return (void *)(uintptr_t)(i * PAGE_SIZE);
+    }
+    return NULL;
+}
+
+void
+pmm_free_contig(void *base, size_t count)
+{
+    for (size_t j = 0; j < count; j++) {
+        pmm_free((void *)((uintptr_t)base + j * PAGE_SIZE));
+    }
+}
+
 size_t pmm_free_pages(void)  { return free_pages;  }
 size_t pmm_total_pages(void) { return total_pages; }
