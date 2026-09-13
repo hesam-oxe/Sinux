@@ -162,11 +162,14 @@ virtio_blk_init(void)
     }
 
     uint64_t bar = pci_read_bar(bus, dev, func, 0);
-    if (!bar || !(bar & 0x1)) {
-        printk(KERN_WARNING "virtio-blk: BAR0 is not I/O space\n");
+    /* pci_read_bar() normalizes an I/O BAR to its base address with the
+     * low flag bits already stripped, so a non-zero value IS the I/O
+     * base — testing the I/O-space bit here would always fail. */
+    if (!bar) {
+        printk(KERN_WARNING "virtio-blk: device has no usable BAR\n");
         return;
     }
-    vblk_iobase = (uint16_t)(bar & ~0x3ULL);
+    vblk_iobase = (uint16_t)bar;
 
     /* enable I/O space + bus mastering */
     pci_write_cmd(bus, dev, func, 0x0005);
