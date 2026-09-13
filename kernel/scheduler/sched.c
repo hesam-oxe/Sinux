@@ -156,9 +156,6 @@ void sched_tick(void) {
         return;
     }
     
-    /* Wake up sleeping processes */
-    extern uint64_t rdtsc(void);
-    uint64_t now = rdtsc();
     
     /* Decrement timeslice */
     if (--cur->timeslice <= 0) {

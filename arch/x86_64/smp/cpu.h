@@ -33,6 +33,9 @@ extern cpu_data_t cpu_data[MAX_CPUS];
 extern int        num_cpus;
 extern int        bsp_cpu_id;
 
+/* TSC frequency of the boot processor in Hz (detected at boot; 0 if unknown) */
+extern uint64_t tsc_freq;
+
 /* IPI vectors */
 #define IPI_VECTOR_INIT         0x00
 #define IPI_VECTOR_STARTUP      0x00

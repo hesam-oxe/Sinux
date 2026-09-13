@@ -39,9 +39,9 @@ include kernel/syscall/module.mk
 include kernel/test/module.mk
 include kernel/scheduler/module.mk
 
-.PHONY: all iso run run-uefi run-bios run-serial test clean deps userspace disk
+.PHONY: all iso run run-uefi run-bios run-serial test clean deps userspace disk compile-check
 
-all: $(TARGET) userspace
+all: $(TARGET) userspace compile-check
 
 userspace:
 	$(MAKE) -C userspace/libc
