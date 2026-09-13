@@ -23,9 +23,9 @@ timeout --signal=TERM --kill-after=10s "$TIMEOUT_S" \
   qemu-system-x86_64 \
     -cdrom "$ISO" -m 256M -device bochs-display \
     -smp 2 \
-    -drive "file=${DISK},format=raw,if=ide,index=0,media=disk" \
-    -drive "file=${DISK},format=raw,if=none,id=vdrv,readonly=on" \
-    -device virtio-blk-pci,drive=vdrv \
+    -drive "file=${DISK},format=raw,if=ide,index=0,media=disk,file.locking=off" \
+    -drive "file=${DISK},format=raw,if=none,id=vdrv,readonly=on,file.locking=off" \
+    -device virtio-blk-pci,drive=vdrv,disable-legacy=off,disable-modern=on,queue-size=128 \
     -nographic -serial mon:stdio -no-reboot \
     > "$LOG" 2>&1 || code=$?
 code=${code:-0}
