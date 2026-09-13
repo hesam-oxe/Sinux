@@ -9,7 +9,8 @@ OBJS += \
     $(BUILD)/arch/x86_64/pit.o         \
     $(BUILD)/arch/x86_64/syscall_init.o \
     $(BUILD)/arch/x86_64/smp/cpu.o     \
-    $(BUILD)/arch/x86_64/smp/lock.o
+    $(BUILD)/arch/x86_64/smp/lock.o    \
+    $(BUILD)/arch/x86_64/smp/trampoline.o
 
 $(BUILD)/arch/x86_64/boot.o: arch/x86_64/boot.asm | $(BUILD)/arch/x86_64
 	$(AS) $(ASFLAGS) -o $@ $<
@@ -22,6 +23,9 @@ $(BUILD)/arch/x86_64/smp/%.o: arch/x86_64/smp/%.c | $(BUILD)/arch/x86_64/smp
 
 $(BUILD)/arch/x86_64:
 	mkdir -p $@
+
+$(BUILD)/arch/x86_64/smp/trampoline.o: arch/x86_64/smp/trampoline.asm | $(BUILD)/arch/x86_64/smp
+	$(AS) $(ASFLAGS) -o $@ $<
 
 $(BUILD)/arch/x86_64/smp:
 	mkdir -p $@
