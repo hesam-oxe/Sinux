@@ -58,6 +58,42 @@ sys_close(int fd)
 static int64_t sys_getpid(void)  { return proc_current()->pid;  }
 static int64_t sys_getppid(void) { return proc_current()->ppid; }
 
+/*
+ * sys_getdents — list a directory for userland (powers /bin/ls).
+ *
+ * Reads up to `len` bytes of NUL-separated entry names from the
+ * directory at `path` into the caller's buffer.  Returns the number
+ * of entries stored, or a negative errno.
+ *
+ * Path-based (not fd-based) on purpose: the caller needs no extra
+ * fd lifetime management, and both ramfs and ext2 already implement
+ * the readdir fs_op used here.
+ */
+static int64_t
+sys_getdents(const char *path, char *buf, size_t len)
+{
+    if (!path || !buf) return -EINVAL;
+
+    file_t *f = vfs_open(path, O_RDONLY);
+    if (!f) return -ENOENT;
+    if (f->inode->type != FT_DIR) { vfs_close(f); return -ENOTDIR; }
+
+    dentry_t d;
+    int64_t  count = 0;
+    size_t   used  = 0;
+
+    while (vfs_readdir(f, &d)) {
+        if (!d.name[0]) continue;
+        size_t nl = kstrlen(d.name) + 1;
+        if (used + nl > len) break;
+        kmemcpy(buf + used, d.name, nl);
+        used += nl;
+        count++;
+    }
+    vfs_close(f);
+    return count;
+}
+
 static int64_t
 sys_brk(uint64_t addr)
 {
@@ -184,6 +220,7 @@ syscall_entry(uint64_t nr,
     case SYS_WRITE:   return sys_write((int)a1, (void*)a2, (size_t)a3);
     case SYS_OPEN:    return sys_open((char*)a1, (int)a2, (int)a3);
     case SYS_CLOSE:   return sys_close((int)a1);
+    case SYS_GETDENTS: return sys_getdents((const char*)a1, (char*)a2, (size_t)a3);
     case SYS_BRK:     return sys_brk(a1);
     case SYS_GETPID:  return sys_getpid();
     case SYS_GETPPID: return sys_getppid();

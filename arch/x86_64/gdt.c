@@ -57,10 +57,15 @@ gdt_set_tss_entry(int i, uint64_t base, uint32_t limit)
     e->_zero       = 0;
 }
 
+/* Mirror of TSS.rsp0 so the syscall entry stub can switch to the
+ * current process's kernel stack without a call. */
+uint64_t gdt_kernel_stack = 0;
+
 void
 gdt_set_kernel_stack(uint64_t rsp0)
 {
     tss.rsp0 = rsp0;
+    gdt_kernel_stack = rsp0;
 }
 
 void
@@ -76,6 +81,7 @@ gdt_init(void)
     gdt_set(4, 0, 0xFFFFF, 0xF2, 0xC); 
 
     tss.rsp0       = (uint64_t)(kernel_stack + sizeof(kernel_stack));
+    gdt_kernel_stack = tss.rsp0;
     tss.ist[0]     = (uint64_t)(kernel_stack + sizeof(kernel_stack));
     tss.iopb_offset = (uint16_t)sizeof(tss_t);
     gdt_set_tss_entry(5, (uint64_t)&tss, (uint32_t)(sizeof(tss_t) - 1));

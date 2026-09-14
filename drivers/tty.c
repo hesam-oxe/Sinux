@@ -34,6 +34,11 @@ void tty_clear(void) { fb_init(); }   /* clears screen and resets cursor */
  *   – blocks until newline
  *   – echoes each character back to screen
  *   – handles backspace visually
+ *
+ * Input comes from BOTH the headless serial line and the PS/2
+ * keyboard, whichever has a byte first — so the same shell works
+ * under `-nographic -serial mon:stdio` and on a graphical console.
+ * Serial carriage-return is normalised to newline (Enter key).
  */
 static int64_t
 tty_dev_read(file_t *f, void *buf, size_t n)
@@ -45,7 +50,14 @@ tty_dev_read(file_t *f, void *buf, size_t n)
     size_t i = 0;
 
     while (i < n) {
-        char c = kbd_getc();
+        char c;
+        for (;;) {
+            if (serial_has_data()) { c = serial_getc(); break; }
+            if (kbd_haschar())     { c = kbd_getc();     break; }
+            __asm__ volatile("pause");
+        }
+
+        if (c == '\r') c = '\n';
 
         if (c == '\b' || c == 127) {       /* backspace */
             if (i > 0) {

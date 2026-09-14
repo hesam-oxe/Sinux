@@ -5,7 +5,8 @@ OBJS += \
     $(BUILD)/drivers/ata.o      \
     $(BUILD)/drivers/fb.o       \
     $(BUILD)/drivers/pci.o      \
-    $(BUILD)/drivers/bga.o
+    $(BUILD)/drivers/bga.o      \
+    $(BUILD)/drivers/virtio_blk.o
 
 $(BUILD)/drivers/%.o: drivers/%.c | $(BUILD)/drivers
 	$(CC) $(CFLAGS) -c -o $@ $<

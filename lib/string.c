@@ -21,9 +21,19 @@ char *kstrcpy(char *dst, const char *src) {
     char *r = dst; while ((*dst++ = *src++)); return r;
 }
 char *kstrncpy(char *dst, const char *src, size_t n) {
+    /* Copy at most n bytes from src, then NUL-pad the remainder of dst.
+     * The previous "while (n--)" form wrapped n to SIZE_MAX whenever src
+     * held no NUL within the first n bytes (e.g. a 1-char ext2 name),
+     * zero-filling memory almost forever past the destination. */
     char *r = dst;
-    while (n-- && (*dst++ = *src++));
-    while (n--) *dst++ = 0;
+    size_t i = 0;
+    while (i < n && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+    while (i < n) {
+        dst[i++] = '\0';
+    }
     return r;
 }
 

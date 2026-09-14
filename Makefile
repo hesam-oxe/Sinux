@@ -39,12 +39,15 @@ include kernel/syscall/module.mk
 include kernel/test/module.mk
 include kernel/scheduler/module.mk
 
-.PHONY: all iso run run-uefi run-bios run-serial test clean deps userspace disk
+.PHONY: all iso run run-uefi run-bios run-serial test clean deps userspace disk compile-check
 
-all: $(TARGET) userspace
+all: $(TARGET) userspace compile-check
 
 userspace:
 	$(MAKE) -C userspace/libc
+	$(MAKE) -C userspace/init
+	$(MAKE) -C userspace/sinush
+	$(MAKE) -C userspace/coreutils
 	$(MAKE) -C userspace/hello
 
 $(TARGET): $(OBJS) arch/$(ARCH)/linker.ld | $(BUILD)
@@ -63,5 +66,8 @@ test: iso
 clean:
 	rm -rf $(BUILD)
 	$(MAKE) -C userspace/libc clean
+	$(MAKE) -C userspace/init clean
+	$(MAKE) -C userspace/sinush clean
+	$(MAKE) -C userspace/coreutils clean
 	$(MAKE) -C userspace/hello clean
 	@echo "[OK] Cleaned"

@@ -258,18 +258,19 @@ kmalloc_slab(size_t size)
 {
     if (size == 0) return NULL;
     if (size > 2048) {
-        size_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-        void *ptr = pmm_alloc();
-        if (!ptr) return NULL;
-        for (size_t i = 1; i < pages; i++) {
-            void *p = pmm_alloc();
-            if (!p) {
-                for (size_t j = 0; j < i; j++)
-                    pmm_free((void *)((uintptr_t)ptr + j * PAGE_SIZE));
-                return NULL;
-            }
-        }
-        return ptr;
+        /* Callers treat the result as one linear buffer, so the pages
+         * must be physically contiguous. The old code took N independent
+         * pmm_alloc() pages (not guaranteed adjacent) and kfree only
+         * ever released the first one. */
+        size_t pages = (size + SLAB_LARGE_HDR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
+        void *base = pmm_alloc_contig(pages);
+        if (!base) return NULL;
+        slab_large_hdr_t *hdr = (slab_large_hdr_t *)base;
+        hdr->magic    = SLAB_LARGE_MAGIC;
+        hdr->reserved = 0;
+        hdr->npages   = (uint64_t)pages;
+        hdr->size     = (uint64_t)size;
+        return (uint8_t *)base + SLAB_LARGE_HDR_SIZE;
     }
     
     for (int i = 0; i < 8; i++) {
@@ -287,6 +288,16 @@ kfree_slab(void *ptr)
     
     uintptr_t addr = (uintptr_t)ptr;
     uintptr_t slab_addr = addr & ~(SLAB_SIZE - 1);
+
+    /* Large contiguous allocation: header sits at the start of the first
+     * page (the user pointer is page_base + SLAB_LARGE_HDR_SIZE). */
+    slab_large_hdr_t *large = (slab_large_hdr_t *)slab_addr;
+    if (large->magic == SLAB_LARGE_MAGIC) {
+        large->magic = 0;
+        pmm_free_contig((void *)slab_addr, (size_t)large->npages);
+        return;
+    }
+
     slab_header_t *slab = (slab_header_t *)slab_addr;
     
     if (slab->magic != SLAB_MAGIC) {

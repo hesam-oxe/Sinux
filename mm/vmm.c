@@ -14,6 +14,30 @@ get_or_alloc(uint64_t *table, int idx, uint64_t flags)
         if (!page) return NULL;
         kmemset(page, 0, PAGE_SIZE);
         table[idx] = (uint64_t)page | flags;
+        return (uint64_t *)page;
+    }
+    if (table[idx] & VMM_HUGE) {
+        /* Split a 2 MiB huge-page mapping (the boot identity map covers
+         * the low 1 GiB this way) into a fresh page table so a smaller
+         * mapping can be installed at this level. The 2 MiB frame stays
+         * mapped, now as 512 4 KiB entries, in this address space only.
+         * The new table link takes the caller's flags: a user mapping
+         * needs U/S set on EVERY level of the walk, not just the leaf. */
+        uint64_t entry = table[idx];
+        uint64_t *pt = pmm_alloc();
+        if (!pt) return NULL;
+        uint64_t base = entry & ~0x1FFFFFULL;
+        uint64_t pte_flags = entry & (VMM_PRESENT | VMM_WRITABLE);
+        for (int i = 0; i < 512; i++) {
+            pt[i] = (base + ((uint64_t)i << 12)) | pte_flags;
+        }
+        table[idx] = ((uint64_t)pt & ~0xFFFULL) | (flags & 0xFFF);
+        return pt;
+    }
+    /* Same rule for pre-existing links: installing a user mapping under
+     * a supervisor-only link would fault at CPL3 despite the leaf flags. */
+    if ((flags & VMM_USER) && !(table[idx] & VMM_USER)) {
+        table[idx] |= VMM_USER;
     }
     return (uint64_t *)(table[idx] & ~0xFFFULL);
 }
@@ -69,6 +93,8 @@ vmm_get_phys(uint64_t *pml4, uint64_t virt)
     if (!(pdpt[p3] & VMM_PRESENT)) return 0;
     uint64_t *pdt  = (uint64_t *)(pdpt[p3] & ~0xFFFULL);
     if (!(pdt[p2]  & VMM_PRESENT)) return 0;
+    if (pdt[p2] & VMM_HUGE)
+        return (pdt[p2] & ~0x1FFFFFULL) + (virt & 0x1FFFFFULL);
     uint64_t *pt   = (uint64_t *)(pdt[p2]  & ~0xFFFULL);
     return pt[p1] & ~0xFFFULL;
 }
@@ -108,6 +134,45 @@ vmm_new_pml4(void)
     if (kernel_pml4) {
         for (int i = 256; i < 512; i++)
             pml4[i] = kernel_pml4[i];
+
+        /* The kernel executes from the identity map built by boot.asm
+         * (PML4 entry 0: 512 x 2 MiB huge pages covering the low 1 GiB),
+         * not from the higher half. Copy that subtree as well, or the
+         * first CR3 switch into a fresh address space page-faults on the
+         * next kernel instruction fetch. Only the table pages are
+         * duplicated: the 2 MiB leaves still map the same physical
+         * frames, and splits performed by get_or_alloc() for user
+         * mappings only ever touch this address space's own tables. */
+        if (kernel_pml4[0] & VMM_PRESENT) {
+            uint64_t *kpdpt = (uint64_t *)(kernel_pml4[0] & ~0xFFFULL);
+            uint64_t *pdpt = pmm_alloc();
+            if (!pdpt) {
+                pmm_free(pml4);
+                return NULL;
+            }
+            for (int p3 = 0; p3 < 512; p3++) {
+                if (!(kpdpt[p3] & VMM_PRESENT)) {
+                    pdpt[p3] = 0;
+                    continue;
+                }
+                uint64_t *kpdt = (uint64_t *)(kpdpt[p3] & ~0xFFFULL);
+                uint64_t *pdt = pmm_alloc();
+                if (!pdt) {
+                    pdpt[p3] = 0;
+                    continue;
+                }
+                kmemcpy(pdt, kpdt, PAGE_SIZE);
+                /* User pages live under entry 0 too (USER_LOAD_BASE is
+                 * 4 MiB): the walk must be permitted at link level, so
+                 * promote the links to U/S. The copied 2 MiB leaves stay
+                 * supervisor-only, which is what actually protects the
+                 * kernel's identity-mapped RAM from ring 3. */
+                pdpt[p3] = ((uint64_t)pdt & ~0xFFFULL)
+                        | (kpdpt[p3] & 0xFFF) | VMM_USER;
+            }
+            pml4[0] = ((uint64_t)pdpt & ~0xFFFULL)
+                    | (kernel_pml4[0] & 0xFFF) | VMM_USER;
+        }
     }
     return pml4;
 }
@@ -124,9 +189,14 @@ vmm_destroy_pml4(uint64_t *pml4)
             uint64_t *pdt = (uint64_t *)(pdpt[p3] & ~0xFFFULL);
             for (int p2 = 0; p2 < 512; p2++) {
                 if (!(pdt[p2] & VMM_PRESENT)) continue;
+                /* Huge entries map shared kernel frames (boot identity
+                 * map): never free them or walk them as page tables. */
+                if (pdt[p2] & VMM_HUGE) continue;
                 uint64_t *pt = (uint64_t *)(pdt[p2] & ~0xFFFULL);
                 for (int p1 = 0; p1 < 512; p1++) {
-                    if (pt[p1] & VMM_PRESENT)
+                    /* Free user pages only: kernel-identity leaves (the
+                     * 4 KiB splits of the boot map) map shared RAM. */
+                    if ((pt[p1] & VMM_PRESENT) && (pt[p1] & VMM_USER))
                         pmm_free((void *)(pt[p1] & ~0xFFFULL));
                 }
                 pmm_free(pt);
@@ -237,11 +307,17 @@ vmm_clone_pml4(uint64_t *src)
 
             for (int p2 = 0; p2 < 512; p2++) {
                 if (!(src_pdt[p2] & VMM_PRESENT)) continue;
+                /* Huge entries are the kernel identity map: shared, not
+                 * user pages — never copy or walk them as page tables. */
+                if (src_pdt[p2] & VMM_HUGE) continue;
 
                 uint64_t *src_pt = (uint64_t *)(src_pdt[p2] & ~0xFFFULL);
 
                 for (int p1 = 0; p1 < 512; p1++) {
                     if (!(src_pt[p1] & VMM_PRESENT)) continue;
+                    /* Copy user pages only; kernel-identity leaves are
+                     * shared RAM inherited via vmm_new_pml4(). */
+                    if (!(src_pt[p1] & VMM_USER)) continue;
 
                     uint64_t src_phys = src_pt[p1] & ~0xFFFULL;
                     uint64_t flags    = src_pt[p1] &  0xFFFULL;

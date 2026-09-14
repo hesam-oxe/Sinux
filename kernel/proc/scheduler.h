@@ -2,6 +2,7 @@
 #include "process.h"
 
 void sched_init(void);
+void sched_preempt_init(void);
 void sched_add(process_t *p);
 void sched_remove(process_t *p);
 void sched_tick(void);      

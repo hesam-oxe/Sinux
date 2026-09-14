@@ -18,6 +18,18 @@ sched_init(void) {
 }
 
 void
+sched_preempt_init(void) {
+    /*
+     * Compatibility entry point for the SMP runqueue scheduler in
+     * kernel/scheduler/sched.c. That module is compiled but not linked yet
+     * (see kernel/scheduler/module.mk): the legacy round-robin scheduler is
+     * the active implementation, so scheduler bring-up only resets its
+     * queue state here.
+     */
+    sched_init();
+}
+
+void
 sched_add(process_t *p) {
     if (q_count >= SCHED_QUEUE_SIZE) return;
     queue[q_tail] = p;

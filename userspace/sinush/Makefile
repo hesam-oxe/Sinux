@@ -1,19 +1,18 @@
 CC     := gcc
-AS     := nasm
 CFLAGS := -m64 -ffreestanding -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) \
-          -O2 -I../libc/include \
+          -O2 -Wall -I../libc/include \
           -mno-red-zone -mno-sse -mno-sse2 \
           -fno-stack-protector
 LDFLAGS := -m elf_x86_64 -nostdlib -T linker.ld
 LIBC    := ../libc/libc.a
 
-all: hello.elf
+all: sinush.elf
 
-hello.elf: hello.o $(LIBC)
+sinush.elf: sinush.o $(LIBC)
 	ld $(LDFLAGS) -o $@ $^
 
-hello.o: hello.c
+sinush.o: sinush.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f hello.o hello.elf
+	rm -f sinush.o sinush.elf

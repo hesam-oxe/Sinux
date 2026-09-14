@@ -9,3 +9,4 @@
 
 void gdt_init(void);
 void gdt_set_kernel_stack(uint64_t rsp0);
+extern uint64_t gdt_kernel_stack;   /* mirror of TSS.rsp0 (syscall entry) */
